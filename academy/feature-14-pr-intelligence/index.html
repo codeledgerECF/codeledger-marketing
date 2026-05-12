@@ -26,9 +26,1351 @@
 <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
-<script type="text/babel" src="../_lib/animations.jsx"></script>
-<script type="text/babel" src="../_lib/common.jsx"></script>
-<script type="text/babel" src="../_lib/academy.jsx"></script>
-<script type="text/babel" src="app.jsx"></script>
+<script type="text/babel">
+// ── animations.jsx ───────────────────────────────────────────────────────────
+
+// animations.jsx
+// Reusable animation starter: Stage, Timeline, Sprite, easing helpers.
+// Usage (in an HTML file that loads React + Babel):
+//
+//   <Stage width={1280} height={720} duration={10} background="#f6f4ef">
+//     <MyScene />
+//   </Stage>
+//
+// Inside <Stage>, any child can call useTime() to read the current
+// playhead (seconds). Or wrap content in <Sprite start={1} end={4}>...</Sprite>
+// to only render during that window -- children receive a `localTime` and
+// `progress` via the useSprite() hook.
+//
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── Easing functions (hand-rolled, Popmotion-style) ─────────────────────────
+// All easings take t ∈ [0,1] and return eased t ∈ [0,1] (may overshoot for back/elastic).
+const Easing = {
+  linear: (t) => t,
+
+  // Quad
+  easeInQuad:    (t) => t * t,
+  easeOutQuad:   (t) => t * (2 - t),
+  easeInOutQuad: (t) => (t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t),
+
+  // Cubic
+  easeInCubic:    (t) => t * t * t,
+  easeOutCubic:   (t) => (--t) * t * t + 1,
+  easeInOutCubic: (t) => (t < 0.5 ? 4 * t * t * t : (t - 1) * (2 * t - 2) * (2 * t - 2) + 1),
+
+  // Quart
+  easeInQuart:    (t) => t * t * t * t,
+  easeOutQuart:   (t) => 1 - (--t) * t * t * t,
+  easeInOutQuart: (t) => (t < 0.5 ? 8 * t * t * t * t : 1 - 8 * (--t) * t * t * t),
+
+  // Expo
+  easeInExpo:  (t) => (t === 0 ? 0 : Math.pow(2, 10 * (t - 1))),
+  easeOutExpo: (t) => (t === 1 ? 1 : 1 - Math.pow(2, -10 * t)),
+  easeInOutExpo: (t) => {
+    if (t === 0) return 0;
+    if (t === 1) return 1;
+    if (t < 0.5) return 0.5 * Math.pow(2, 20 * t - 10);
+    return 1 - 0.5 * Math.pow(2, -20 * t + 10);
+  },
+
+  // Sine
+  easeInSine:    (t) => 1 - Math.cos((t * Math.PI) / 2),
+  easeOutSine:   (t) => Math.sin((t * Math.PI) / 2),
+  easeInOutSine: (t) => -(Math.cos(Math.PI * t) - 1) / 2,
+
+  // Back (overshoot)
+  easeOutBack: (t) => {
+    const c1 = 1.70158, c3 = c1 + 1;
+    return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+  },
+  easeInBack: (t) => {
+    const c1 = 1.70158, c3 = c1 + 1;
+    return c3 * t * t * t - c1 * t * t;
+  },
+  easeInOutBack: (t) => {
+    const c1 = 1.70158, c2 = c1 * 1.525;
+    return t < 0.5
+      ? (Math.pow(2 * t, 2) * ((c2 + 1) * 2 * t - c2)) / 2
+      : (Math.pow(2 * t - 2, 2) * ((c2 + 1) * (t * 2 - 2) + c2) + 2) / 2;
+  },
+
+  // Elastic
+  easeOutElastic: (t) => {
+    const c4 = (2 * Math.PI) / 3;
+    if (t === 0) return 0;
+    if (t === 1) return 1;
+    return Math.pow(2, -10 * t) * Math.sin((t * 10 - 0.75) * c4) + 1;
+  },
+};
+
+// ── Core interpolation helpers ──────────────────────────────────────────────
+
+// Clamp a value to [min, max]
+const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+
+// interpolate([0, 0.5, 1], [0, 100, 50], ease?) -> fn(t)
+// Popmotion-style: linearly maps t across input keyframes to output values,
+// with optional easing per segment (single fn or array of fns).
+function interpolate(input, output, ease = Easing.linear) {
+  return (t) => {
+    if (t <= input[0]) return output[0];
+    if (t >= input[input.length - 1]) return output[output.length - 1];
+    for (let i = 0; i < input.length - 1; i++) {
+      if (t >= input[i] && t <= input[i + 1]) {
+        const span = input[i + 1] - input[i];
+        const local = span === 0 ? 0 : (t - input[i]) / span;
+        const easeFn = Array.isArray(ease) ? (ease[i] || Easing.linear) : ease;
+        const eased = easeFn(local);
+        return output[i] + (output[i + 1] - output[i]) * eased;
+      }
+    }
+    return output[output.length - 1];
+  };
+}
+
+// animate({from, to, start, end, ease})(t) — simpler single-segment tween.
+// Returns `from` before `start`, `to` after `end`.
+function animate({ from = 0, to = 1, start = 0, end = 1, ease = Easing.easeInOutCubic }) {
+  return (t) => {
+    if (t <= start) return from;
+    if (t >= end) return to;
+    const local = (t - start) / (end - start);
+    return from + (to - from) * ease(local);
+  };
+}
+
+// ── Timeline context ────────────────────────────────────────────────────────
+
+const TimelineContext = React.createContext({ time: 0, duration: 10, playing: false });
+
+const useTime = () => React.useContext(TimelineContext).time;
+const useTimeline = () => React.useContext(TimelineContext);
+
+// ── Sprite ──────────────────────────────────────────────────────────────────
+// Renders children only when the playhead is inside [start, end]. Provides
+// a sub-context with `localTime` (seconds since start) and `progress` (0..1).
+//
+//   <Sprite start={2} end={5}>
+//     {({ localTime, progress }) => <Thing x={progress * 100} />}
+//   </Sprite>
+//
+// Or as a plain wrapper — children can call useSprite() themselves.
+
+const SpriteContext = React.createContext({ localTime: 0, progress: 0, duration: 0 });
+const useSprite = () => React.useContext(SpriteContext);
+
+function Sprite({ start = 0, end = Infinity, children, keepMounted = false }) {
+  const { time } = useTimeline();
+  const visible = time >= start && time <= end;
+  if (!visible && !keepMounted) return null;
+
+  const duration = end - start;
+  const localTime = Math.max(0, time - start);
+  const progress = duration > 0 && isFinite(duration)
+    ? clamp(localTime / duration, 0, 1)
+    : 0;
+
+  const value = { localTime, progress, duration, visible };
+
+  return (
+    <SpriteContext.Provider value={value}>
+      {typeof children === 'function' ? children(value) : children}
+    </SpriteContext.Provider>
+  );
+}
+
+// ── Sample sprite components ────────────────────────────────────────────────
+
+// TextSprite: fades/slides text in on entry, holds, then fades out on exit.
+// Props: text, x, y, size, color, font, entryDur, exitDur, align
+function TextSprite({
+  text,
+  x = 0, y = 0,
+  size = 48,
+  color = '#111',
+  font = 'Inter, system-ui, sans-serif',
+  weight = 600,
+  entryDur = 0.45,
+  exitDur = 0.35,
+  entryEase = Easing.easeOutBack,
+  exitEase = Easing.easeInCubic,
+  align = 'left',
+  letterSpacing = '-0.01em',
+}) {
+  const { localTime, duration } = useSprite();
+  const exitStart = Math.max(0, duration - exitDur);
+
+  let opacity = 1;
+  let ty = 0;
+
+  if (localTime < entryDur) {
+    const t = entryEase(clamp(localTime / entryDur, 0, 1));
+    opacity = t;
+    ty = (1 - t) * 16;
+  } else if (localTime > exitStart) {
+    const t = exitEase(clamp((localTime - exitStart) / exitDur, 0, 1));
+    opacity = 1 - t;
+    ty = -t * 8;
+  }
+
+  const translateX = align === 'center' ? '-50%' : align === 'right' ? '-100%' : '0';
+
+  return (
+    <div style={{
+      position: 'absolute',
+      left: x, top: y,
+      transform: `translate(${translateX}, ${ty}px)`,
+      opacity,
+      fontFamily: font,
+      fontSize: size,
+      fontWeight: weight,
+      color,
+      letterSpacing,
+      whiteSpace: 'pre',
+      lineHeight: 1.1,
+      willChange: 'transform, opacity',
+    }}>
+      {text}
+    </div>
+  );
+}
+
+// ImageSprite: scales + fades in; optional Ken Burns drift during hold.
+function ImageSprite({
+  src,
+  x = 0, y = 0,
+  width = 400, height = 300,
+  entryDur = 0.6,
+  exitDur = 0.4,
+  kenBurns = false,
+  kenBurnsScale = 1.08,
+  radius = 12,
+  fit = 'cover',
+  placeholder = null, // {label: string} for striped placeholder
+}) {
+  const { localTime, duration } = useSprite();
+  const exitStart = Math.max(0, duration - exitDur);
+
+  let opacity = 1;
+  let scale = 1;
+
+  if (localTime < entryDur) {
+    const t = Easing.easeOutCubic(clamp(localTime / entryDur, 0, 1));
+    opacity = t;
+    scale = 0.96 + 0.04 * t;
+  } else if (localTime > exitStart) {
+    const t = Easing.easeInCubic(clamp((localTime - exitStart) / exitDur, 0, 1));
+    opacity = 1 - t;
+    scale = (kenBurns ? kenBurnsScale : 1) + 0.02 * t;
+  } else if (kenBurns) {
+    const holdSpan = exitStart - entryDur;
+    const holdT = holdSpan > 0 ? (localTime - entryDur) / holdSpan : 0;
+    scale = 1 + (kenBurnsScale - 1) * holdT;
+  }
+
+  const content = placeholder ? (
+    <div style={{
+      width: '100%', height: '100%',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      background: 'repeating-linear-gradient(135deg, #e9e6df 0 10px, #dcd8cf 10px 20px)',
+      color: '#6b6458',
+      fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+      fontSize: 13,
+      letterSpacing: '0.04em',
+      textTransform: 'uppercase',
+    }}>
+      {placeholder.label || 'image'}
+    </div>
+  ) : (
+    <img src={src} alt="" style={{ width: '100%', height: '100%', objectFit: fit, display: 'block' }} />
+  );
+
+  return (
+    <div style={{
+      position: 'absolute',
+      left: x, top: y,
+      width, height,
+      opacity,
+      transform: `scale(${scale})`,
+      transformOrigin: 'center',
+      borderRadius: radius,
+      overflow: 'hidden',
+      willChange: 'transform, opacity',
+    }}>
+      {content}
+    </div>
+  );
+}
+
+// RectSprite: simple rectangle that animates position/size/color via props.
+// Useful demo primitive — takes a `render` fn for per-frame customization.
+function RectSprite({
+  x = 0, y = 0,
+  width = 100, height = 100,
+  color = '#111',
+  radius = 8,
+  entryDur = 0.4,
+  exitDur = 0.3,
+  render, // optional: (ctx) => style overrides
+}) {
+  const spriteCtx = useSprite();
+  const { localTime, duration } = spriteCtx;
+  const exitStart = Math.max(0, duration - exitDur);
+
+  let opacity = 1;
+  let scale = 1;
+
+  if (localTime < entryDur) {
+    const t = Easing.easeOutBack(clamp(localTime / entryDur, 0, 1));
+    opacity = clamp(localTime / entryDur, 0, 1);
+    scale = 0.4 + 0.6 * t;
+  } else if (localTime > exitStart) {
+    const t = Easing.easeInQuad(clamp((localTime - exitStart) / exitDur, 0, 1));
+    opacity = 1 - t;
+    scale = 1 - 0.15 * t;
+  }
+
+  const overrides = render ? render(spriteCtx) : {};
+
+  return (
+    <div style={{
+      position: 'absolute',
+      left: x, top: y,
+      width, height,
+      background: color,
+      borderRadius: radius,
+      opacity,
+      transform: `scale(${scale})`,
+      transformOrigin: 'center',
+      willChange: 'transform, opacity',
+      ...overrides,
+    }} />
+  );
+}
+
+
+function Stage({
+  width = 1280,
+  height = 720,
+  duration = 10,
+  background = '#f6f4ef',
+  fps = 60,
+  loop = true,
+  autoplay = true,
+  persistKey = 'animstage',
+  children,
+}) {
+  const [time, setTime] = React.useState(() => {
+    try {
+      const v = parseFloat(localStorage.getItem(persistKey + ':t') || '0');
+      return isFinite(v) ? clamp(v, 0, duration) : 0;
+    } catch { return 0; }
+  });
+  const [playing, setPlaying] = React.useState(autoplay);
+  const [hoverTime, setHoverTime] = React.useState(null);
+  const [scale, setScale] = React.useState(1);
+
+  const stageRef = React.useRef(null);
+  const canvasRef = React.useRef(null);
+  const rafRef = React.useRef(null);
+  const lastTsRef = React.useRef(null);
+
+  // Persist playhead
+  React.useEffect(() => {
+    try { localStorage.setItem(persistKey + ':t', String(time)); } catch {}
+  }, [time, persistKey]);
+
+  // Auto-scale to fit viewport
+  React.useEffect(() => {
+    if (!stageRef.current) return;
+    const el = stageRef.current;
+    const measure = () => {
+      const barH = 44; // playback bar height
+      const s = Math.min(
+        el.clientWidth / width,
+        (el.clientHeight - barH) / height
+      );
+      setScale(Math.max(0.05, s));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    window.addEventListener('resize', measure);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, [width, height]);
+
+  // Animation loop
+  React.useEffect(() => {
+    if (!playing) {
+      lastTsRef.current = null;
+      return;
+    }
+    const step = (ts) => {
+      if (lastTsRef.current == null) lastTsRef.current = ts;
+      const dt = (ts - lastTsRef.current) / 1000;
+      lastTsRef.current = ts;
+      setTime((t) => {
+        let next = t + dt;
+        if (next >= duration) {
+          if (loop) next = next % duration;
+          else { next = duration; setPlaying(false); }
+        }
+        return next;
+      });
+      rafRef.current = requestAnimationFrame(step);
+    };
+    rafRef.current = requestAnimationFrame(step);
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      lastTsRef.current = null;
+    };
+  }, [playing, duration, loop]);
+
+  // Keyboard: space = play/pause, ← → = seek
+  React.useEffect(() => {
+    const onKey = (e) => {
+      if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
+      if (e.code === 'Space') {
+        e.preventDefault();
+        setPlaying(p => !p);
+      } else if (e.code === 'ArrowLeft') {
+        setTime(t => clamp(t - (e.shiftKey ? 1 : 0.1), 0, duration));
+      } else if (e.code === 'ArrowRight') {
+        setTime(t => clamp(t + (e.shiftKey ? 1 : 0.1), 0, duration));
+      } else if (e.key === '0' || e.code === 'Home') {
+        setTime(0);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [duration]);
+
+  const displayTime = hoverTime != null ? hoverTime : time;
+
+  const ctxValue = React.useMemo(
+    () => ({ time: displayTime, duration, playing, setTime, setPlaying }),
+    [displayTime, duration, playing]
+  );
+
+  return (
+    <div
+      ref={stageRef}
+      style={{
+        position: 'absolute', inset: 0,
+        display: 'flex', flexDirection: 'column',
+        alignItems: 'center',
+        background: '#0a0a0a',
+        fontFamily: 'Inter, system-ui, sans-serif',
+      }}
+    >
+      {/* Canvas area — vertically centered in remaining space */}
+      <div style={{
+        flex: 1,
+        width: '100%',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        overflow: 'hidden',
+        minHeight: 0,
+      }}>
+        <div
+          ref={canvasRef}
+          style={{
+            width, height,
+            background,
+            position: 'relative',
+            transform: `scale(${scale})`,
+            transformOrigin: 'center',
+            flexShrink: 0,
+            boxShadow: '0 20px 60px rgba(0,0,0,0.4)',
+            overflow: 'hidden',
+          }}
+        >
+          <TimelineContext.Provider value={ctxValue}>
+            {children}
+          </TimelineContext.Provider>
+        </div>
+      </div>
+
+      {/* Playback bar — stacked below canvas, never overlapping */}
+      <PlaybackBar
+        time={displayTime}
+        actualTime={time}
+        duration={duration}
+        playing={playing}
+        onPlayPause={() => setPlaying(p => !p)}
+        onReset={() => { setTime(0); }}
+        onSeek={(t) => setTime(t)}
+        onHover={(t) => setHoverTime(t)}
+      />
+    </div>
+  );
+}
+
+// ── Playback bar ────────────────────────────────────────────────────────────
+// Play/pause, return-to-begin, scrub track, time display.
+// Uses fixed-width time fields so layout doesn't thrash.
+
+function PlaybackBar({ time, duration, playing, onPlayPause, onReset, onSeek, onHover }) {
+  const trackRef = React.useRef(null);
+  const [dragging, setDragging] = React.useState(false);
+
+  const timeFromEvent = React.useCallback((e) => {
+    const rect = trackRef.current.getBoundingClientRect();
+    const x = clamp((e.clientX - rect.left) / rect.width, 0, 1);
+    return x * duration;
+  }, [duration]);
+
+  const onTrackMove = (e) => {
+    if (!trackRef.current) return;
+    const t = timeFromEvent(e);
+    if (dragging) {
+      onSeek(t);
+    } else {
+      onHover(t);
+    }
+  };
+
+  const onTrackLeave = () => {
+    if (!dragging) onHover(null);
+  };
+
+  const onTrackDown = (e) => {
+    setDragging(true);
+    const t = timeFromEvent(e);
+    onSeek(t);
+    onHover(null);
+  };
+
+  React.useEffect(() => {
+    if (!dragging) return;
+    const onUp = () => setDragging(false);
+    const onMove = (e) => {
+      if (!trackRef.current) return;
+      const t = timeFromEvent(e);
+      onSeek(t);
+    };
+    window.addEventListener('mouseup', onUp);
+    window.addEventListener('mousemove', onMove);
+    return () => {
+      window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('mousemove', onMove);
+    };
+  }, [dragging, timeFromEvent, onSeek]);
+
+  const pct = duration > 0 ? (time / duration) * 100 : 0;
+  const fmt = (t) => {
+    const total = Math.max(0, t);
+    const m = Math.floor(total / 60);
+    const s = Math.floor(total % 60);
+    const cs = Math.floor((total * 100) % 100);
+    return `${String(m).padStart(1, '0')}:${String(s).padStart(2, '0')}.${String(cs).padStart(2, '0')}`;
+  };
+
+  const mono = 'JetBrains Mono, ui-monospace, SFMono-Regular, monospace';
+
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 12,
+      padding: '8px 16px',
+      background: 'rgba(20,20,20,0.92)',
+      borderTop: '1px solid rgba(255,255,255,0.08)',
+      width: '100%',
+      maxWidth: 680,
+      alignSelf: 'center',
+
+      borderRadius: 8,
+      color: '#f6f4ef',
+      fontFamily: 'Inter, system-ui, sans-serif',
+      userSelect: 'none',
+      flexShrink: 0,
+    }}>
+      <IconButton onClick={onReset} title="Return to start (0)">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+          <path d="M3 2v10M12 2L5 7l7 5V2z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round"/>
+        </svg>
+      </IconButton>
+      <IconButton onClick={onPlayPause} title="Play/pause (space)">
+        {playing ? (
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <rect x="3" y="2" width="3" height="10" fill="currentColor"/>
+            <rect x="8" y="2" width="3" height="10" fill="currentColor"/>
+          </svg>
+        ) : (
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path d="M3 2l9 5-9 5V2z" fill="currentColor"/>
+          </svg>
+        )}
+      </IconButton>
+
+      {/* Current time: fixed width so it doesn't thrash */}
+      <div style={{
+        fontFamily: mono,
+        fontSize: 12,
+        fontVariantNumeric: 'tabular-nums',
+        width: 64, textAlign: 'right',
+        color: '#f6f4ef',
+      }}>
+        {fmt(time)}
+      </div>
+
+      {/* Scrub track */}
+      <div
+        ref={trackRef}
+        onMouseMove={onTrackMove}
+        onMouseLeave={onTrackLeave}
+        onMouseDown={onTrackDown}
+        style={{
+          flex: 1,
+          height: 22,
+          position: 'relative',
+          cursor: 'pointer',
+          display: 'flex', alignItems: 'center',
+        }}
+      >
+        <div style={{
+          position: 'absolute',
+          left: 0, right: 0, height: 4,
+          background: 'rgba(255,255,255,0.12)',
+          borderRadius: 2,
+        }}/>
+        <div style={{
+          position: 'absolute',
+          left: 0, width: `${pct}%`, height: 4,
+          background: 'oklch(72% 0.12 250)',
+          borderRadius: 2,
+        }}/>
+        <div style={{
+          position: 'absolute',
+          left: `${pct}%`, top: '50%',
+          width: 12, height: 12,
+          marginLeft: -6, marginTop: -6,
+          background: '#fff',
+          borderRadius: 6,
+          boxShadow: '0 2px 4px rgba(0,0,0,0.4)',
+        }}/>
+      </div>
+
+      {/* Duration: fixed width */}
+      <div style={{
+        fontFamily: mono,
+        fontSize: 12,
+        fontVariantNumeric: 'tabular-nums',
+        width: 64, textAlign: 'left',
+        color: 'rgba(246,244,239,0.55)',
+      }}>
+        {fmt(duration)}
+      </div>
+    </div>
+  );
+}
+
+function IconButton({ children, onClick, title }) {
+  const [hover, setHover] = React.useState(false);
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        width: 28, height: 28,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: hover ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.04)',
+        border: '1px solid rgba(255,255,255,0.1)',
+        borderRadius: 6,
+        color: '#f6f4ef',
+        cursor: 'pointer',
+        padding: 0,
+        transition: 'background 120ms',
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+
+Object.assign(window, {
+  Easing, interpolate, animate, clamp,
+  TimelineContext, useTime, useTimeline,
+  Sprite, SpriteContext, useSprite,
+  TextSprite, ImageSprite, RectSprite,
+  Stage, PlaybackBar,
+});
+
+
+
+// ── common.jsx ───────────────────────────────────────────────────────────────
+// Shared visual primitives for the CodeLedger launch video.
+// All components must be used inside a <Stage> and (usually) a <Sprite>.
+
+// ── Brand palette ──────────────────────────────────────────────────────────
+const BRAND = {
+  paper:    '#f6efe1',
+  paper2:   '#eee4cf',
+  ink:      '#1c2230',
+  inkSoft:  '#5b6478',
+  rule:     '#d8cdb3',
+  navy:     '#1A2744',
+  navy2:    '#2b3a5c',
+  navyDeep: '#0e1628',
+  copper:   '#B87A6B',
+  copperSoft:'#f5e4df',
+  ochre:    '#bc6c25',
+  green:    '#0b6e4f',
+  greenSoft:'#e4efe8',
+  brick:    '#a23b2a',
+  termBg:   '#0a0f1c',
+  termInk:  '#d8e0ee',
+  termDim:  '#6a7895',
+  termAcc:  '#e6c896',
+  termGo:   '#7ed4a8',
+  termWarn: '#f0b170',
+  termErr:  '#f08770',
+  fontSans: '"Inter Tight", system-ui, sans-serif',
+  fontSerif:'"Source Serif 4", Georgia, serif',
+  fontMono: '"JetBrains Mono", ui-monospace, monospace',
+};
+
+// ── Narration: copper eyebrow + ink line(s), bottom-third ──────────────────
+// Each "beat" is a narration line that fades in, holds, fades out.
+// Multiple Narration sprites can be stacked across a scene.
+function NarrationBlock({ lines = [], style = {}, accent = BRAND.copper, color = BRAND.paper, align = 'left', maxWidth = 1100 }) {
+  const { localTime, duration } = useSprite();
+  const entry = 0.45;
+  const exit = 0.45;
+  const exitStart = Math.max(0, duration - exit);
+  let op = 1, ty = 0;
+  if (localTime < entry) {
+    const t = Easing.easeOutCubic(clamp(localTime / entry, 0, 1));
+    op = t; ty = (1 - t) * 14;
+  } else if (localTime > exitStart) {
+    const t = Easing.easeInQuad(clamp((localTime - exitStart) / exit, 0, 1));
+    op = 1 - t; ty = -t * 6;
+  }
+  return (
+    <div style={{
+      position: 'absolute',
+      left: 120, right: 120, bottom: 120,
+      opacity: op,
+      transform: `translateY(${ty}px)`,
+      textAlign: align,
+      ...style,
+    }}>
+      <div style={{
+        maxWidth, marginLeft: align === 'center' ? 'auto' : 0,
+        marginRight: align === 'center' ? 'auto' : 0,
+      }}>
+        {lines.map((line, i) => (
+          <div key={i} style={{
+            fontFamily: BRAND.fontSerif,
+            fontStyle: i === 0 ? 'normal' : 'italic',
+            fontSize: line.size || 40,
+            fontWeight: line.weight || 500,
+            lineHeight: 1.32,
+            color: line.accent ? accent : color,
+            letterSpacing: '0.002em',
+            textWrap: 'balance',
+            marginTop: i === 0 ? 0 : 6,
+          }}>
+            {line.text || line}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Centered hero caption (for impact moments) ─────────────────────────────
+function HeroCaption({ eyebrow, title, accent = BRAND.copper, color = BRAND.paper }) {
+  const { localTime, duration } = useSprite();
+  const entry = 0.6;
+  const exit = 0.5;
+  const exitStart = Math.max(0, duration - exit);
+  let op = 1, ty = 0, scale = 1;
+  if (localTime < entry) {
+    const t = Easing.easeOutCubic(clamp(localTime / entry, 0, 1));
+    op = t; ty = (1 - t) * 20; scale = 0.98 + 0.02 * t;
+  } else if (localTime > exitStart) {
+    const t = Easing.easeInCubic(clamp((localTime - exitStart) / exit, 0, 1));
+    op = 1 - t; ty = -t * 10; scale = 1 + 0.01 * t;
+  }
+  return (
+    <div style={{
+      position: 'absolute', inset: 0,
+      display: 'flex', flexDirection: 'column',
+      alignItems: 'center', justifyContent: 'center',
+      opacity: op, transform: `translateY(${ty}px) scale(${scale})`,
+      textAlign: 'center', padding: '0 160px',
+    }}>
+      {eyebrow && (
+        <div style={{
+          fontFamily: BRAND.fontMono,
+          fontSize: 18, letterSpacing: '0.28em',
+          color: accent, fontWeight: 600, textTransform: 'uppercase',
+          marginBottom: 36,
+        }}>{eyebrow}</div>
+      )}
+      <div style={{
+        fontFamily: BRAND.fontSans, fontWeight: 800,
+        fontSize: 96, lineHeight: 1.02,
+        letterSpacing: '-0.035em',
+        color, textWrap: 'balance', maxWidth: 1500,
+      }}>{title}</div>
+    </div>
+  );
+}
+
+// ── Terminal line: types out chars over `typeFor` seconds ──────────────────
+function typedText(full, started, typeFor, t) {
+  if (t < started) return '';
+  const local = clamp((t - started) / typeFor, 0, 1);
+  const n = Math.floor(full.length * local);
+  return full.slice(0, n);
+}
+
+// Terminal panel — render lines that appear/type at specific local times.
+// lines: [{at, type:'cmd'|'out'|'ok'|'warn'|'err'|'dim'|'banner', text, typeFor?, blink?}]
+function Terminal({
+  x = 120, y = 120, width = 1680, height = 720,
+  lines = [],
+  title = 'codeledger',
+  cwd = '~/payments',
+  caret = true,
+  scale = 1,
+}) {
+  const { localTime } = useSprite();
+  const t = localTime;
+  const colorFor = {
+    cmd: BRAND.paper,
+    out: BRAND.termInk,
+    ok: BRAND.termGo,
+    warn: BRAND.termWarn,
+    err: BRAND.termErr,
+    dim: BRAND.termDim,
+    banner: BRAND.termAcc,
+    prompt: BRAND.copper,
+  };
+  return (
+    <div style={{
+      position: 'absolute', left: x, top: y, width, height,
+      background: BRAND.termBg,
+      border: '1px solid rgba(255,255,255,0.06)',
+      borderRadius: 14,
+      boxShadow: '0 30px 80px rgba(0,0,0,0.55)',
+      overflow: 'hidden',
+      transform: `scale(${scale})`, transformOrigin: 'center',
+      fontFamily: BRAND.fontMono,
+    }}>
+      {/* Chrome */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 12,
+        padding: '14px 20px',
+        borderBottom: '1px solid rgba(255,255,255,0.06)',
+        background: 'rgba(255,255,255,0.02)',
+      }}>
+        <div style={{ display: 'flex', gap: 7 }}>
+          {['#ff6058', '#ffbd2f', '#28c940'].map(c => (
+            <div key={c} style={{ width: 12, height: 12, borderRadius: 6, background: c }} />
+          ))}
+        </div>
+        <div style={{
+          flex: 1, textAlign: 'center',
+          fontFamily: BRAND.fontMono, fontSize: 13,
+          color: BRAND.termDim, letterSpacing: '0.06em',
+        }}>{title} — {cwd}</div>
+        <div style={{ width: 60 }} />
+      </div>
+
+      {/* Body */}
+      <div style={{
+        padding: '28px 32px',
+        fontSize: 22, lineHeight: 1.55,
+        color: BRAND.termInk,
+      }}>
+        {lines.map((line, i) => {
+          if (t < line.at) return null;
+          const text = line.typeFor
+            ? typedText(line.text, line.at, line.typeFor, t)
+            : line.text;
+          const isLast = i === lines.length - 1;
+          const showCaret = caret && isLast && t < line.at + (line.typeFor || 0.001) + 0.3;
+          return (
+            <div key={i} style={{
+              display: 'flex',
+              alignItems: 'baseline',
+              gap: 12,
+              color: colorFor[line.type] || BRAND.termInk,
+              whiteSpace: 'pre',
+              marginTop: line.gap || 0,
+              fontWeight: line.bold ? 600 : 400,
+              fontSize: line.size || 22,
+              opacity: line.opacity != null ? line.opacity : 1,
+            }}>
+              {line.type === 'cmd' && (
+                <span style={{ color: BRAND.copper, fontWeight: 600 }}>$</span>
+              )}
+              <span>
+                {text}
+                {showCaret && (
+                  <span style={{
+                    display: 'inline-block', width: 10, height: 22,
+                    background: BRAND.termInk, marginLeft: 4,
+                    transform: 'translateY(3px)',
+                    opacity: Math.floor(t * 2) % 2 === 0 ? 1 : 0.2,
+                  }} />
+                )}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Ranked file scan list (Scene 2) ────────────────────────────────────────
+function FileScanList({ x, y, files = [], start = 0, perItem = 0.06 }) {
+  const { localTime } = useSprite();
+  return (
+    <div style={{
+      position: 'absolute', left: x, top: y,
+      fontFamily: BRAND.fontMono, fontSize: 18,
+      color: BRAND.termInk,
+    }}>
+      {files.map((f, i) => {
+        const at = start + i * perItem;
+        const visible = localTime >= at;
+        if (!visible) return null;
+        const local = clamp((localTime - at) / 0.25, 0, 1);
+        const op = local;
+        const tx = (1 - local) * -10;
+        return (
+          <div key={i} style={{
+            display: 'flex', gap: 18, alignItems: 'baseline',
+            padding: '4px 0',
+            opacity: op, transform: `translateX(${tx}px)`,
+          }}>
+            <span style={{ color: BRAND.termDim, width: 32, textAlign: 'right' }}>{String(i + 1).padStart(2, '0')}</span>
+            <span style={{ color: f.dim ? BRAND.termDim : BRAND.termAcc, width: 70 }}>{f.score}</span>
+            <span style={{ color: f.dim ? BRAND.termDim : BRAND.termInk }}>{f.path}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── Card (Discovery / Review / Summary panels) ─────────────────────────────
+function Card({ x, y, width, height, children, accent = BRAND.copper, style = {}, paper = BRAND.paper }) {
+  const { localTime, duration } = useSprite();
+  const entry = 0.6;
+  let op = 1, scale = 1, ty = 0;
+  if (localTime < entry) {
+    const t = Easing.easeOutCubic(clamp(localTime / entry, 0, 1));
+    op = t; scale = 0.96 + 0.04 * t; ty = (1 - t) * 16;
+  }
+  return (
+    <div style={{
+      position: 'absolute', left: x, top: y, width, height,
+      background: paper,
+      border: `1px solid ${BRAND.rule}`,
+      borderLeft: `6px solid ${accent}`,
+      boxShadow: '0 30px 80px rgba(0,0,0,0.5)',
+      borderRadius: 4,
+      opacity: op, transform: `translateY(${ty}px) scale(${scale})`,
+      fontFamily: BRAND.fontSerif, color: BRAND.ink,
+      padding: 36,
+      ...style,
+    }}>
+      {children}
+    </div>
+  );
+}
+
+// ── Stamped status pill (GO / WARN / etc) ──────────────────────────────────
+function StatusPill({ label, color = BRAND.green, bg = BRAND.greenSoft, size = 14 }) {
+  return (
+    <span style={{
+      display: 'inline-block',
+      fontFamily: BRAND.fontMono, fontSize: size,
+      fontWeight: 700, letterSpacing: '0.18em',
+      textTransform: 'uppercase',
+      color, background: bg,
+      padding: '6px 14px',
+      borderRadius: 2,
+      border: `1px solid ${color}`,
+      whiteSpace: 'nowrap',
+    }}>{label}</span>
+  );
+}
+
+// ── Ticker number — counts up to a target value ────────────────────────────
+function Ticker({ from = 0, to, start = 0, dur = 1, fmt = (v) => Math.round(v).toLocaleString(), style }) {
+  const { localTime } = useSprite();
+  let val = to;
+  if (localTime < start) val = from;
+  else if (localTime < start + dur) {
+    const t = Easing.easeOutCubic(clamp((localTime - start) / dur, 0, 1));
+    val = from + (to - from) * t;
+  }
+  return <span style={style}>{fmt(val)}</span>;
+}
+
+// ── Scene-frame: applies a subtle vignette + scanline texture overlay ──────
+function SceneFrame({ background = BRAND.paper, dark = false, children }) {
+  return (
+    <div style={{
+      position: 'absolute', inset: 0, background, overflow: 'hidden',
+    }}>
+      {children}
+      <div style={{
+        position: 'absolute', inset: 0, pointerEvents: 'none',
+        background: dark
+          ? 'radial-gradient(ellipse at center, transparent 30%, rgba(0,0,0,0.55) 100%)'
+          : 'radial-gradient(ellipse at center, transparent 55%, rgba(28,34,48,0.12) 100%)',
+      }} />
+      {/* Paper grain / scanlines */}
+      <div style={{
+        position: 'absolute', inset: 0, pointerEvents: 'none',
+        opacity: dark ? 0.06 : 0.03,
+        backgroundImage: dark
+          ? 'repeating-linear-gradient(to bottom, transparent 0 2px, rgba(255,255,255,0.6) 2px 3px)'
+          : 'repeating-linear-gradient(to bottom, transparent 0 60px, rgba(26,39,68,0.4) 60px 61px)',
+      }} />
+    </div>
+  );
+}
+
+// ── Chrome/header used across the deck (small ContextECF mark in corner) ───
+function CornerMark({ light = false, label = 'CodeLedger', sub = 'v0.10.18' }) {
+  return (
+    <div style={{
+      position: 'absolute', top: 60, left: 80,
+      display: 'flex', alignItems: 'center', gap: 14,
+      fontFamily: BRAND.fontSans, fontWeight: 800,
+      color: light ? BRAND.paper : BRAND.navy,
+      fontSize: 22, letterSpacing: '-0.005em',
+      whiteSpace: 'nowrap',
+    }}>
+      <div style={{
+        width: 18, height: 18, background: BRAND.copper,
+        transform: 'rotate(45deg)', flexShrink: 0,
+      }} />
+      <span style={{ whiteSpace: 'nowrap' }}>Context<span style={{ color: BRAND.copper }}>ECF</span> · {label}</span>
+      <span style={{
+        fontFamily: BRAND.fontMono, fontSize: 12,
+        color: light ? 'rgba(246,239,225,0.45)' : BRAND.inkSoft,
+        letterSpacing: '0.18em', fontWeight: 500,
+        marginLeft: 6,
+        whiteSpace: 'nowrap',
+      }}>{sub}</span>
+    </div>
+  );
+}
+
+// ── Slow drift wrapper (used for background scenes) ────────────────────────
+function Drift({ amount = 30, dur = 12, children }) {
+  const { localTime } = useSprite();
+  const phase = (localTime % dur) / dur;
+  const dx = Math.sin(phase * Math.PI * 2) * amount;
+  const dy = Math.cos(phase * Math.PI * 2) * amount * 0.6;
+  return (
+    <div style={{
+      position: 'absolute', inset: 0,
+      transform: `translate(${dx}px, ${dy}px)`,
+    }}>{children}</div>
+  );
+}
+
+Object.assign(window, {
+  BRAND,
+  NarrationBlock, HeroCaption,
+  Terminal, FileScanList, Card, StatusPill, Ticker,
+  SceneFrame, CornerMark, Drift,
+  typedText,
+});
+
+
+// ── academy.jsx ──────────────────────────────────────────────────────────────
+// Shared helpers for all CodeLedger Academy videos.
+
+function SeriesBug({ label }) {
+  return (
+    <div style={{
+      position: 'absolute', top: 56, left: 80,
+      display: 'flex', alignItems: 'center', gap: 14,
+      fontFamily: BRAND.fontMono, fontWeight: 600,
+      color: 'rgba(246,239,225,0.55)',
+      fontSize: 14, letterSpacing: '0.22em', textTransform: 'uppercase',
+    }}>
+      <div style={{ width: 14, height: 14, background: BRAND.copper, transform: 'rotate(45deg)' }} />
+      <span style={{ color: BRAND.copper }}>CL</span>
+      <span style={{ color: 'rgba(246,239,225,0.35)' }}>·</span>
+      <span>{label}</span>
+    </div>
+  );
+}
+
+// Title scene helper. duration = 3s
+function TitleScene({ start, num, title, sub }) {
+  const end = start + 3;
+  return (
+    <Sprite start={start} end={end}>
+      <SceneFrame background="#0a0d18" dark>
+        <SeriesBug label={`CodeLedger Academy · Feature ${num}`} />
+        <Sprite start={start + 0.1} end={end}>
+          <div style={{
+            position: 'absolute', inset: 0,
+            display: 'flex', flexDirection: 'column',
+            alignItems: 'center', justifyContent: 'center', gap: 24,
+          }}>
+            <div style={{
+              fontFamily: BRAND.fontMono, fontSize: 14,
+              letterSpacing: '0.32em', textTransform: 'uppercase',
+              color: BRAND.copper, fontWeight: 600,
+            }}>Feature {num}</div>
+            <div style={{
+              fontFamily: BRAND.fontSans, fontWeight: 800,
+              fontSize: 120, color: BRAND.paper,
+              letterSpacing: '-0.04em', lineHeight: 1, textAlign: 'center',
+              textWrap: 'balance', padding: '0 80px',
+            }}>{title}</div>
+            <div style={{
+              fontFamily: BRAND.fontMono, fontSize: 26,
+              color: BRAND.termGo, marginTop: 12,
+              textAlign: 'center',
+            }}>{sub}</div>
+          </div>
+        </Sprite>
+      </SceneFrame>
+    </Sprite>
+  );
+}
+
+// End scene helper. duration = 6s
+function EndScene({ start, cmd }) {
+  const end = start + 6;
+  return (
+    <Sprite start={start} end={end}>
+      <SceneFrame background="#0a0d18" dark>
+        <SeriesBug label="CodeLedger Academy" />
+        <div style={{
+          position: 'absolute', inset: 0,
+          display: 'flex', flexDirection: 'column',
+          alignItems: 'center', justifyContent: 'center', gap: 36,
+        }}>
+          <Sprite start={start + 0.2} end={end} keepMounted>
+            {(({ localTime: lt }) => {
+              const txt = typedText(cmd, 0, 1.2, lt);
+              return (
+                <div style={{
+                  fontFamily: BRAND.fontMono, fontSize: 64, color: BRAND.termInk,
+                  textAlign: 'center', maxWidth: 1700,
+                }}>
+                  <span style={{ color: BRAND.copper, fontWeight: 600 }}>$ </span>
+                  {txt}
+                  <span style={{
+                    display: 'inline-block', width: 18, height: 56,
+                    background: BRAND.termInk, marginLeft: 8,
+                    transform: 'translateY(8px)',
+                    opacity: Math.floor(lt * 2) % 2 === 0 ? 1 : 0.15,
+                  }} />
+                </div>
+              );
+            })}
+          </Sprite>
+          <Sprite start={start + 2.0} end={end}>
+            <div style={{
+              fontFamily: BRAND.fontMono, fontSize: 16,
+              letterSpacing: '0.32em', textTransform: 'uppercase',
+              color: 'rgba(246,239,225,0.5)',
+              fontWeight: 600, marginTop: 18,
+              textAlign: 'center',
+            }}>CodeLedger Academy · contextecf.com</div>
+          </Sprite>
+        </div>
+        <Sprite start={end - 0.6} end={end} keepMounted>
+          {(({ progress }) => (
+            <div style={{
+              position: 'absolute', inset: 0,
+              background: '#000', opacity: progress, pointerEvents: 'none',
+            }} />
+          ))}
+        </Sprite>
+      </SceneFrame>
+    </Sprite>
+  );
+}
+
+// Caption helper - bottom-centered for scenes
+function BottomCaption({ text, accent = true, size = 36 }) {
+  return (
+    <NarrationBlock
+      style={{ bottom: 70 }}
+      color={BRAND.paper}
+      lines={[{ text, size, accent, weight: 700 }]}
+      align="center"
+    />
+  );
+}
+
+// Scene wrapper — dark background with series bug
+function AcademyScene({ start, dur, num, children }) {
+  return (
+    <Sprite start={start} end={start + dur}>
+      <SceneFrame background="#0a0d18" dark>
+        <SeriesBug label={`CodeLedger Academy · Feature ${num}`} />
+        {children}
+      </SceneFrame>
+    </Sprite>
+  );
+}
+
+// Eyebrow — small uppercase label above a scene
+function Eyebrow({ text, top = 150 }) {
+  return (
+    <div style={{
+      position: 'absolute', top, left: 0, right: 0,
+      textAlign: 'center',
+      fontFamily: BRAND.fontMono, fontSize: 14,
+      letterSpacing: '0.32em', textTransform: 'uppercase',
+      color: BRAND.copper, fontWeight: 600,
+    }}>{text}</div>
+  );
+}
+
+// Page mount helper
+function mountApp(App) {
+  ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+}
+
+Object.assign(window, {
+  SeriesBug, TitleScene, EndScene, BottomCaption,
+  AcademyScene, Eyebrow, mountApp,
+});
+
+
+// ── feature-14-pr-intelligence/app.jsx ────────────────────────────────────────────────────────
+// Feature 14 — CI and PR Intelligence
+function App() {
+  return (
+    <Stage width={1920} height={1080} duration={65} background="#0a0d18" fps={60} loop={false} autoplay={true} persistKey="cl-academy-f14">
+      <TitleScene start={0} num="14" title="PR Intelligence" sub="$ codeledger ci pr-check" />
+
+      <AcademyScene start={3} dur={10} num="14">
+        <Eyebrow text="The PR looked fine" top={150} />
+        <Sprite start={3.2} end={13}>
+          <div style={{ position: 'absolute', top: 230, left: 120, right: 120 }}>
+            <div style={{ padding: '20px 28px', background: '#fff', borderRadius: 8, marginBottom: 24, color: '#1f2328' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+                <span style={{ background: '#1f883d', color: '#fff', padding: '4px 12px', borderRadius: 20, fontSize: 13, fontWeight: 600 }}>Open</span>
+                <span style={{ fontFamily: BRAND.fontSans, fontSize: 22, fontWeight: 500 }}>Minor refactor, no behavior changes</span>
+                <span style={{ color: '#59636e' }}>#4421</span>
+              </div>
+              <div style={{ fontFamily: BRAND.fontSerif, fontSize: 16, color: '#59636e', fontStyle: 'italic', marginTop: 12 }}>"Just a small cleanup."</div>
+            </div>
+            <div style={{ padding: '14px 22px', background: 'rgba(248,113,113,0.08)', border: '1px solid #f87171', borderRadius: 8, fontFamily: BRAND.fontMono, fontSize: 18, color: BRAND.paper }}>
+              <span style={{ color: BRAND.termDim, marginRight: 12 }}>NEXT DAY</span>
+              <span style={{ color: '#f87171', fontWeight: 700 }}>incident · auth bypass regression</span>
+            </div>
+          </div>
+        </Sprite>
+        <Sprite start={10.5} end={12.8}>
+          <BottomCaption text="The PR looked fine. The evidence was missing." />
+        </Sprite>
+      </AcademyScene>
+
+      <AcademyScene start={13} dur={14} num="14">
+        <Sprite start={13.2} end={27}>
+          <Terminal x={120} y={140} width={1680} height={820} title="codeledger" cwd="ci · pr-check"
+            lines={[
+              { at: 0, type: 'cmd', text: 'codeledger ci pr-check --governance', typeFor: 1.4 },
+              { at: 1.8, type: 'dim', text: '', gap: 10 },
+              { at: 2.0, type: 'banner', text: 'PR #4421 · changed files: 5 · risk: medium', size: 22, bold: true },
+              { at: 2.8, type: 'out', text: '', gap: 10 },
+              { at: 3.0, type: 'out', text: 'Evidence:', size: 22 },
+              { at: 3.5, type: 'ok',  text: '  bundle: bnd_42f19ac', size: 20 },
+              { at: 4.0, type: 'ok',  text: '  tests: 2', size: 20 },
+              { at: 4.5, type: 'warn',text: '  missing evidence: 1', size: 20 },
+              { at: 5.2, type: 'dim', text: '', gap: 10 },
+              { at: 5.4, type: 'out', text: 'Governance:', size: 22 },
+              { at: 5.9, type: 'warn',text: '  disposition: safe_with_tests_required', size: 22, bold: true },
+              { at: 6.4, type: 'out', text: '  receipt: egr_pr_418_001', size: 20 },
+              { at: 7.0, type: 'dim', text: '', gap: 10 },
+              { at: 7.2, type: 'ok',  text: 'Decision: advisory_pass', size: 22, bold: true },
+            ]}
+          />
+        </Sprite>
+      </AcademyScene>
+
+      <AcademyScene start={27} dur={15} num="14">
+        <Eyebrow text="Reviewer sees · in GitHub · already" top={150} />
+        <Sprite start={27.4} end={42}>
+          <div style={{ position: 'absolute', top: 230, left: 220, right: 220, background: '#fff', border: '1px solid #d0d7de', borderRadius: 12, overflow: 'hidden', color: '#1f2328' }}>
+            <div style={{ padding: '16px 22px', background: '#f6f8fa', borderBottom: '1px solid #d0d7de', display: 'flex', alignItems: 'center', gap: 14 }}>
+              <div style={{ width: 32, height: 32, borderRadius: 16, background: BRAND.navy, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <div style={{ width: 12, height: 12, background: BRAND.copper, transform: 'rotate(45deg)' }} />
+              </div>
+              <div style={{ fontFamily: BRAND.fontSans, fontSize: 14 }}><b>codeledger-bot</b> commented · just now</div>
+            </div>
+            <div style={{ padding: '24px 28px' }}>
+              <div style={{ fontFamily: BRAND.fontSans, fontSize: 26, fontWeight: 800, color: BRAND.navy, marginBottom: 22, display: 'flex', alignItems: 'center', gap: 10 }}>🛡 CodeLedger Review</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '180px 1fr', rowGap: 14, fontFamily: BRAND.fontMono, fontSize: 17 }}>
+                <div style={{ color: '#59636e' }}>Risk:</div>
+                <div><span style={{ padding: '4px 12px', background: '#fbedd6', color: '#bc6c25', borderRadius: 12, fontWeight: 700, fontSize: 13 }}>MEDIUM</span></div>
+                <div style={{ color: '#59636e' }}>Drift:</div>
+                <div><span style={{ padding: '4px 12px', background: '#dcfce7', color: '#16a34a', borderRadius: 12, fontWeight: 700, fontSize: 13 }}>NONE</span></div>
+                <div style={{ color: '#59636e' }}>Evidence Gaps:</div>
+                <div><span style={{ padding: '4px 12px', background: '#fee2e2', color: '#dc2626', borderRadius: 12, fontWeight: 700, fontSize: 13 }}>DETECTED</span></div>
+              </div>
+              <div style={{ marginTop: 22, paddingTop: 18, borderTop: '1px solid #d0d7de' }}>
+                <div style={{ fontFamily: BRAND.fontMono, fontSize: 12, letterSpacing: '0.18em', color: '#59636e', marginBottom: 10 }}>SUGGESTED FOCUS</div>
+                <ul style={{ fontFamily: BRAND.fontSerif, fontSize: 18, color: '#1f2328', paddingLeft: 22 }}>
+                  <li style={{ marginBottom: 6 }}>Auth session-store.ts lacks test coverage</li>
+                  <li>Missing regression test for public route bypass</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </Sprite>
+        <Sprite start={39} end={41.8}>
+          <BottomCaption text="Repo-grounded signal. Not author self-report." />
+        </Sprite>
+      </AcademyScene>
+
+      <AcademyScene start={42} dur={13} num="14">
+        <Eyebrow text="Three sprints · same PR class" top={150} />
+        <div style={{ position: 'absolute', top: 280, left: 120, right: 120, display: 'flex', gap: 30 }}>
+          <Sprite start={42.4} end={55}>
+            <div style={{ flex: 1, padding: '32px 36px', background: 'rgba(248,113,113,0.06)', border: '1px solid #f87171', borderTop: '4px solid #f87171', borderRadius: 6 }}>
+              <div style={{ fontFamily: BRAND.fontMono, fontSize: 13, letterSpacing: '0.22em', color: '#f87171', fontWeight: 700, marginBottom: 22 }}>WITHOUT CODELEDGER</div>
+              <div style={{ fontFamily: BRAND.fontSans, fontSize: 76, fontWeight: 800, color: '#f87171', letterSpacing: '-0.04em', lineHeight: 1 }}>2</div>
+              <div style={{ fontFamily: BRAND.fontMono, fontSize: 18, color: BRAND.termDim, marginTop: 8 }}>incidents · post-merge</div>
+            </div>
+          </Sprite>
+          <Sprite start={43.4} end={55}>
+            <div style={{ flex: 1, padding: '32px 36px', background: 'rgba(74,222,128,0.06)', border: '1px solid #4ade80', borderTop: '4px solid #4ade80', borderRadius: 6 }}>
+              <div style={{ fontFamily: BRAND.fontMono, fontSize: 13, letterSpacing: '0.22em', color: '#4ade80', fontWeight: 700, marginBottom: 22 }}>WITH CODELEDGER</div>
+              <div style={{ fontFamily: BRAND.fontSans, fontSize: 76, fontWeight: 800, color: '#4ade80', letterSpacing: '-0.04em', lineHeight: 1 }}>0</div>
+              <div style={{ fontFamily: BRAND.fontMono, fontSize: 18, color: BRAND.termDim, marginTop: 8 }}>tests added · before merge</div>
+            </div>
+          </Sprite>
+        </div>
+        <Sprite start={51} end={54.8}>
+          <BottomCaption text="Signal before merge. Not investigation after." />
+        </Sprite>
+      </AcademyScene>
+
+      <EndScene start={55} cmd='codeledger ci pr-check --governance' />
+    </Stage>
+  );
+}
+mountApp(App);
+
+</script>
 </body>
 </html>
