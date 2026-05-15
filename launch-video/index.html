@@ -35,5 +35,143 @@
 <script type="text/babel" src="scenes-a.jsx"></script>
 <script type="text/babel" src="scenes-b.jsx"></script>
 <script type="text/babel" src="app.jsx"></script>
+
+<script>
+// ── Ambient audio engine ────────────────────────────────────────────────────
+// Synthesized A-minor drone: layered sine oscillators + per-layer LFOs,
+// slow filter sweep, convolution reverb, master fade-in.
+// Starts automatically (page only loads after user clicks Play in parent).
+(function () {
+  var AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return;
+
+  var ctx = new AC();
+  var muted = false;
+
+  // ── Master gain with 4-second fade-in ──────────────────────────────────────
+  var master = ctx.createGain();
+  master.gain.setValueAtTime(0, ctx.currentTime);
+  master.gain.linearRampToValueAtTime(0.16, ctx.currentTime + 4);
+  master.connect(ctx.destination);
+
+  // ── Convolution reverb (noise-burst impulse, ~3 s tail) ────────────────────
+  function makeReverb(durSec, decay) {
+    var len = Math.floor(ctx.sampleRate * durSec);
+    var buf = ctx.createBuffer(2, len, ctx.sampleRate);
+    for (var c = 0; c < 2; c++) {
+      var d = buf.getChannelData(c);
+      for (var i = 0; i < len; i++) {
+        d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
+      }
+    }
+    var conv = ctx.createConvolver();
+    conv.buffer = buf;
+    return conv;
+  }
+  var reverb     = makeReverb(3.0, 2.2);
+  var reverbSend = ctx.createGain();
+  reverbSend.gain.value = 0.28;
+  reverb.connect(reverbSend);
+  reverbSend.connect(master);
+
+  // ── Warm lowpass filter ────────────────────────────────────────────────────
+  var lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.value = 1100;
+  lp.Q.value = 0.6;
+  lp.connect(master);
+  lp.connect(reverb);
+
+  // Slow filter-frequency LFO (0.04 Hz → period ~25 s)
+  var fLFO = ctx.createOscillator();
+  var fLFOg = ctx.createGain();
+  fLFO.type = 'sine';
+  fLFO.frequency.value = 0.04;
+  fLFOg.gain.value = 550;
+  fLFO.connect(fLFOg);
+  fLFOg.connect(lp.frequency);
+  fLFO.start();
+
+  // ── Global amplitude swell LFO (0.07 Hz → period ~14 s) ───────────────────
+  var aLFO = ctx.createOscillator();
+  var aLFOg = ctx.createGain();
+  aLFO.type = 'sine';
+  aLFO.frequency.value = 0.07;
+  aLFOg.gain.value = 0.04;
+  aLFO.connect(aLFOg);
+  aLFOg.connect(master.gain);
+  aLFO.start();
+
+  // ── Oscillator layers: A-minor ambient chord ───────────────────────────────
+  // A1=55, E2≈82.5, A2=110, C3≈130.8, E3=165, A3=220, E4=330, A4=440
+  var layers = [
+    { freq: 55,    g: 0.42, dt:   0 },
+    { freq: 55,    g: 0.26, dt:  -8 },   // subtle beat against the root
+    { freq: 82.5,  g: 0.30, dt:   4 },   // fifth
+    { freq: 110,   g: 0.32, dt:   0 },   // octave
+    { freq: 110,   g: 0.16, dt:   6 },
+    { freq: 130.8, g: 0.13, dt:  -3 },   // minor third
+    { freq: 165,   g: 0.15, dt:   2 },   // fifth (upper)
+    { freq: 220,   g: 0.10, dt:  -5 },
+    { freq: 330,   g: 0.05, dt:   0 },
+    { freq: 440,   g: 0.02, dt:   3 },
+  ];
+
+  layers.forEach(function (l) {
+    var osc  = ctx.createOscillator();
+    var gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = l.freq;
+    osc.detune.value = l.dt;
+    gain.gain.value = l.g;
+    osc.connect(gain);
+    gain.connect(lp);
+    osc.start();
+
+    // Each layer has its own slow LFO for organic movement
+    var lfo  = ctx.createOscillator();
+    var lfog = ctx.createGain();
+    lfo.type = 'sine';
+    lfo.frequency.value = 0.025 + Math.random() * 0.06;
+    lfog.gain.value = l.g * 0.28;
+    lfo.connect(lfog);
+    lfog.connect(gain.gain);
+    lfo.start();
+  });
+
+  // ── Mute / unmute button ───────────────────────────────────────────────────
+  var btn = document.createElement('button');
+  btn.title = 'Toggle music';
+  btn.innerHTML = '&#x1F50A;'; // 🔊
+  btn.style.cssText = [
+    'position:fixed', 'bottom:14px', 'left:14px', 'z-index:9999',
+    'width:34px', 'height:34px', 'border-radius:50%',
+    'background:rgba(255,255,255,0.10)', 'border:1px solid rgba(255,255,255,0.18)',
+    'color:rgba(255,255,255,0.75)', 'font-size:14px', 'cursor:pointer',
+    'display:flex', 'align-items:center', 'justify-content:center',
+    'backdrop-filter:blur(6px)', '-webkit-backdrop-filter:blur(6px)',
+    'transition:background 0.2s, opacity 0.2s', 'line-height:1',
+    'padding:0',
+  ].join(';');
+
+  btn.addEventListener('mouseover', function () {
+    btn.style.background = 'rgba(255,255,255,0.20)';
+  });
+  btn.addEventListener('mouseout', function () {
+    btn.style.background = muted
+      ? 'rgba(255,255,255,0.05)'
+      : 'rgba(255,255,255,0.10)';
+  });
+  btn.addEventListener('click', function () {
+    muted = !muted;
+    master.gain.setTargetAtTime(muted ? 0 : 0.16, ctx.currentTime, 0.4);
+    btn.innerHTML = muted ? '&#x1F507;' : '&#x1F50A;'; // 🔇 / 🔊
+    btn.style.opacity = muted ? '0.5' : '1';
+    btn.style.background = 'rgba(255,255,255,0.10)';
+  });
+
+  document.body.appendChild(btn);
+}());
+</script>
 </body>
 </html>
