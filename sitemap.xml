@@ -79,6 +79,12 @@
 <priority>0.95</priority>
 </url>
 <url>
+<loc>https://codeledgerecf.github.io/codeledger/blog</loc>
+<lastmod>2026-05-03</lastmod>
+<changefreq>weekly</changefreq>
+<priority>0.8</priority>
+</url>
+<url>
 <loc>https://codeledgerecf.github.io/codeledger/feedback</loc>
 <lastmod>2026-05-03</lastmod>
 <changefreq>monthly</changefreq>
