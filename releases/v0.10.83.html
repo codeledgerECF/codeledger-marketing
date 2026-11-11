@@ -3,36 +3,20 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CodeLedger v0.10.83</title>
-<meta name="description" content="CodeLedger v0.10.83 release notes, platform downloads, and first-use steps.">
+<title>CodeLedger v0.10.83 download notice</title>
+<meta name="description" content="Status of the CodeLedger v0.10.83 runtime downloads.">
 <style>
 :root { color-scheme: light dark; font: 17px/1.55 system-ui, sans-serif; }
 body { margin: 0 auto; max-width: 46rem; padding: 2rem 1.25rem 3rem; }
-h1 { font-size: clamp(2rem, 7vw, 3rem); line-height: 1.1; }
-h2 { margin-top: 2rem; }
-li { margin-block: .5rem; }
-code { overflow-wrap: anywhere; }
 </style>
 </head>
 <body>
 <header><nav aria-label="Site"><a href="/">CodeLedger</a> · <a href="/blog">Blog</a></nav></header>
 <main>
-<h1>CodeLedger v0.10.83</h1>
-<p>When a coding agent names a behavior, you still need to find the implementation, the test, and the revision. CodeLedger gives Claude Code and Codex task-scoped repository context through MCP, with source windows you can check.</p>
-<h2>Download</h2>
-<ul>
-<li><a href="https://github.com/codeledgerECF/codeledger/releases/download/v0.10.83/codeledger-0.10.83.zip">Mac and Linux bootstrap ZIP</a> for Apple Silicon macOS and Linux x64. The wrapper may fetch the native runtime.</li>
-<li><a href="https://github.com/codeledgerECF/codeledger/releases/download/v0.10.83/codeledger-0.10.83-darwin-arm64.zip">Apple Silicon macOS native ZIP</a>. The runtime is bundled. Gatekeeper may need internet access.</li>
-<li><a href="https://github.com/codeledgerECF/codeledger/releases/download/v0.10.83/codeledger-standalone-v0.10.83.cjs">Windows x64 Node standalone</a> and <a href="https://github.com/codeledgerECF/codeledger/releases/download/v0.10.83/codeledger-standalone.cjs.LEGAL.txt">third-party notices</a>. Node 24 was used for qualification.</li>
-</ul>
-<p>Compare your download with the <a href="https://github.com/codeledgerECF/codeledger/releases/download/v0.10.83/SHA256SUMS-v0.10.83.txt">SHA-256 manifest</a>. The <a href="https://github.com/codeledgerECF/codeledger/releases/tag/v0.10.83">release page</a> lists the native binaries and installation choices.</p>
-<h2>Try one task</h2>
-<ol>
-<li>On a supported native platform, you can also install with <code>npm install -g @codeledger/cli@0.10.83</code>.</li>
-<li>In your checkout, run <code>codeledger ready --task "Find the implementation and test for the behavior I am changing"</code>. Review generated guidance with <code>git status --short</code>.</li>
-<li>Point Claude Code or Codex at this checkout through MCP and ask it to call <code>get_activation_payload</code>. Ask for the implementation, the test, and the revision.</li>
-</ol>
-<p>Context stays separate across linked worktrees. Reactivate after moving HEAD to refresh the evidence. PR advice in observe mode can point to nearby tests and gaps without blocking a merge.</p>
+<h1>CodeLedger v0.10.83 runtime downloads withdrawn</h1>
+<p>We withdrew the runtime downloads after a release review identified an issue with the contents of the distributed builds. Fresh installs on Mac, Linux, and Windows may be unable to start CodeLedger or connect over MCP.</p>
+<p>An installation that already has a local runtime may continue to work. The v0.10.82 runtime downloads were also withdrawn.</p>
+<p>We’ll post replacement availability after qualification on the <a href="https://github.com/codeledgerECF/codeledger/releases/tag/v0.10.83">GitHub release notice</a>.</p>
 </main>
 </body>
 </html>
